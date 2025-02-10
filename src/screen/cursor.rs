@@ -270,4 +270,14 @@ impl Cursor {
         self.index = line.size;
         self.desired_column = self.column;
     }
+
+    pub fn top(&mut self) {
+        self.row = 0;
+        self.home();
+    }
+
+    pub fn bottom(&mut self, buf: &Buffer) {
+        self.row = buf.line_count() - 1;
+        self.end(buf);
+    }
 }

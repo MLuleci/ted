@@ -140,7 +140,7 @@ impl Buffer {
         })
     }
 
-    pub fn write(&self, overwrite: bool) -> io::Result<usize> {
+    pub fn write(&mut self, overwrite: bool) -> io::Result<usize> {
         if self.is_readonly() {
             return Err(io::Error::new(
                 io::ErrorKind::ReadOnlyFilesystem,
@@ -160,18 +160,26 @@ impl Buffer {
         }
 
         let file = OpenOptions::new().write(true).open(&self.path)?;
-        let modified = file.metadata()?.modified()?;
+        let modified = file.metadata()?.modified().unwrap_or(SystemTime::now());
 
-        if modified != self.modified && !overwrite {
+        if modified > self.modified && !overwrite {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 format!("{} has been modified", self.path.display())
             ));
         }
 
-        let mut writer = BufWriter::new(file);
+        let mut writer = BufWriter::new(&file);
         let data = self.to_string();
-        writer.write_all(data.as_bytes()).map(|_| data.len())
+        let len = data.len();
+
+        file
+            .set_len(len as u64)
+            .and_then(|_| writer.write_all(data.as_bytes()))?;
+
+        self.dirty = false;
+        self.modified = SystemTime::now();
+        Ok(len)
     }
 
     pub fn is_readonly(&self) -> bool {
@@ -210,9 +218,11 @@ impl Buffer {
                         let tail = line.split(pt.x);
                         let index = pt.y + 1;
                         self.lines.insert(index, tail);
+                        self.dirty = true;
                         return Some(Edit::Delete(Point { x: 0, y: index - 1 }));
                     } else {
                         line.insert(*ch, pt.x);
+                        self.dirty = true;
                         return Some(Edit::Delete(pt.clone()));
                     }
                 }
@@ -227,11 +237,13 @@ impl Buffer {
                                 .chars()
                                 .last()
                                 .expect("No character returned");
+                            self.dirty = true;
                             return Some(Edit::Overwrite(previous, pt.clone()));
                         },
                         Ok(None) => {
                             // Append to the end of the line
                             line.insert(*ch, line.text.len());
+                            self.dirty = true;
                             return Some(Edit::Delete(pt.clone()));
                         },
                         Err(_) => panic!("Incomplete chunk - overwrite")
@@ -249,6 +261,7 @@ impl Buffer {
                                 .chars()
                                 .last()
                                 .expect("No character returned");
+                            self.dirty = true;
                             return Some(Edit::Insert(ch, pt.clone()));
                         },
                         Ok(None) => { 
@@ -258,6 +271,7 @@ impl Buffer {
                                 let line = self.lines.get_mut(pt.y).unwrap();
                                 let len = line.text.len();
                                 line.concat(next);
+                                self.dirty = true;
                                 return Some(Edit::Insert('\n', Point { x: len, y: pt.y }));
                             }
                         },

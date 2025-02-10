@@ -47,13 +47,13 @@ Links:
 - VT100 reference: https://vt100.net/docs/vt100-ug/chapter3.html
 
 # TODOs:
-- Clear messages at appropriate times
+- Scrolling with mouse
 - Shortcuts:
     - M-s: save (done)
     - M->: switch buffer (done)
     - M-<: switch back buffer (done)
     - C-Left/Right: move and select
-    - C-Up/Down: goto start or end of buffer respectively
+    - M-Up/Down: goto start or end of buffer (done)
     - M-c: copy
     - M-x: cut
     - M-p: paste
@@ -65,4 +65,3 @@ Links:
     - M-f: find
     - M-h: find and replace
     - M-p: switch to buffer by name (done)
-    - M-j: jump to line

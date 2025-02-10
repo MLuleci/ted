@@ -79,18 +79,32 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
     let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
     let mut index = 0;
     let mut chord = false;
+    let mut timeout = 0;
 
     let mut events = stdin.events();
     loop {
         let screen = &mut screens[index];
+
+        if timeout == 0 {
+            screen.clear_message();
+        } 
+        
+        if timeout >= 0 {
+            timeout -= 1;
+        }
+
         screen.draw(&mut stdout)?;
         stdout.flush()?;
 
         if let Some(event) = events.next() {
-            match event? {
-                Event::Key(Key::Esc) => chord = false,
-                Event::Key(Key::Char(ch)) => {
-                    if chord {
+            if chord {
+                chord = false;
+                timeout = 0;
+                let mut was_valid = true;
+
+                match event? {
+                    Event::Key(Key::Esc) => continue,
+                    Event::Key(Key::Char(ch)) => {
                         match ch {
                             'q' => break,
                             'z' => screen.undo(),
@@ -114,9 +128,8 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
                                 }
                             },
                             'w' | 's' => {
-                                let buffer= screen.buffer();
                                 let should_save = 
-                                    buffer.is_dirty() && (
+                                    screen.is_dirty() && (
                                         ch == 's'
                                         || screen.confirm_prompt(
                                             &mut events, 
@@ -128,7 +141,7 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
 
                                 if should_save {
                                     // Try normally first...
-                                    if let Err(e) = buffer.write(false) {
+                                    if let Err(e) = screen.write(false) {
                                         // ...if it fails...
                                         match e.kind() {
                                             ErrorKind::AlreadyExists => {
@@ -137,21 +150,23 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
                                                     &mut events, 
                                                     &mut stdout,
                                                     "Overwrite (y/N)?",
-                                                false
+                                                    false
                                                 )?;
 
                                                 if overwrite {
-                                                    let _ = buffer
-                                                        .write(true)
-                                                        .map_err(|e|
-                                                            // don't crash if we still can't write save
-                                                            screen.set_message(Message::Error(e.to_string())));
+                                                    if let Err(e) = screen.write(true) {
+                                                        // don't crash if we still can't write save
+                                                        screen.set_message(Message::Error(e.to_string()));
+                                                        timeout = 5;
+                                                        continue;
+                                                    }
                                                 }
                                             },
                                             _ => {
                                                 // ...show error and stop
                                                 screen.set_message(Message::Error(e.to_string()));
-                                                continue
+                                                timeout = 5;
+                                                continue;
                                             }
                                         }
                                     }
@@ -173,12 +188,12 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
                                         .iter()
                                         .enumerate()
                                         .find(|(_, s)| {
-                                            s.buffer().path
+                                            s.path()
                                                 .file_name()
                                                 .and_then(|o| o.to_str())
                                                 .map_or(
                                                     false, 
-                                                    |n| n.contains(&reply)
+                                                    |n| n.starts_with(&reply)
                                                 )
                                         })
                                         .map(|i| i.0);
@@ -188,52 +203,66 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
                                     } else {
                                         let m = format!("Buffer '{reply}' not found");
                                         screens[index].set_message(Message::Warning(m));
+                                        timeout = 3;
                                     }
                                 }
                             },
-                            _ => ()
+                            _ => was_valid = false
                         }
-                    } else {
+                    }
+                    Event::Key(Key::Up) => screen.top(),
+                    Event::Key(Key::Down) => screen.bottom(),
+                    _ => was_valid = false
+                }
+
+                if !was_valid {
+                    screens[index].set_message(Message::Warning(String::from("Unknown chord")));
+                    timeout = 3;
+                }
+            } else {
+                match event? {
+                    Event::Key(Key::Char(ch)) => {
                         if screen.overwrite {
                             screen.overwrite(ch);
                         } else {
                             screen.insert(ch)
                         }
-                    }
-                },
-                Event::Key(Key::Insert) => {
-                    screen.overwrite = !screen.overwrite;
-                },
-                Event::Key(Key::Ctrl(ch)) => {
-                    if ch == 'x' && !chord {
-                        chord = true;
-                        let m = String::from("Waiting for chord after C-x (Esc to cancel)");
-                        screen.set_message(Message::Info(m));
-                    }
-                },
-                Event::Key(Key::Backspace) => screen.backspace(),
-                Event::Key(Key::Delete) => screen.delete(),
-                Event::Key(Key::Home) => screen.home(),
-                Event::Key(Key::End) => screen.end(),
-                Event::Key(Key::Up) => screen.move_cursor(Direction::Up),
-                Event::Key(Key::Down) => screen.move_cursor(Direction::Down),
-                Event::Key(Key::Left) => screen.move_cursor(Direction::Left),
-                Event::Key(Key::Right) => screen.move_cursor(Direction::Right),
-                Event::Mouse(me) => {
-                    match me {
-                        MouseEvent::Press(_, x, y) => 
-                        screen.set_cursor((x - 1) as usize, (y - 1) as usize),
-                        _ => (),
-                    }
-                },
-                _ => {}
+                    },
+                    Event::Key(Key::Insert) => {
+                        screen.overwrite = !screen.overwrite;
+                    },
+                    Event::Key(Key::Ctrl(ch)) => {
+                        if ch == 'x' && !chord {
+                            chord = true;
+                            timeout = -1;
+                            let m = String::from("Waiting for C-x chord (Esc to cancel)");
+                            screen.set_message(Message::Info(m));
+                        }
+                    },
+                    Event::Key(Key::Backspace) => screen.backspace(),
+                    Event::Key(Key::Delete) => screen.delete(),
+                    Event::Key(Key::Home) => screen.home(),
+                    Event::Key(Key::End) => screen.end(),
+                    Event::Key(Key::Up) => screen.move_cursor(Direction::Up),
+                    Event::Key(Key::Down) => screen.move_cursor(Direction::Down),
+                    Event::Key(Key::Left) => screen.move_cursor(Direction::Left),
+                    Event::Key(Key::Right) => screen.move_cursor(Direction::Right),
+                    Event::Mouse(me) => {
+                        match me {
+                            MouseEvent::Press(_, x, y) => 
+                            screen.set_cursor((x - 1) as usize, (y - 1) as usize),
+                            _ => (),
+                        }
+                    },
+                    _ => ()
+                }
             }
         }
 
         assert!(index < screens.len(), "screen index out-of-range");
     }
 
-    write!(stdout, "{}{}", termion::clear::All, termion::cursor::Goto(1, 1))?;
+    write!(stdout, "{}{}{}", termion::clear::All, termion::cursor::Goto(1, 1), termion::cursor::BlinkingBar)?;
 
     Ok(())
 }

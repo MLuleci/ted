@@ -8,6 +8,12 @@ use crate::Config;
 use termion as t;
 use std::io::{self, Write};
 use std::cmp::min;
+use std::path::PathBuf;
+
+const LINE_HIGHLIGHT: t::color::Rgb = t::color::Rgb(39, 39, 39);
+const LINE_TEXT: t::color::LightWhite = t::color::LightWhite;
+const STATUS_HIGHLIGHT: t::color::Rgb = t::color::Rgb(184, 184, 184);
+const STATUS_TEXT: t::color::White = t::color::White;
 
 pub enum Message {
     Info(String),
@@ -28,8 +34,8 @@ impl Message {
         match self {
             Message::Info(_) =>
                 write!(out, "{}{}", 
-                    t::color::Bg(t::color::Rgb(184, 184, 184)),
-                    t::color::Fg(t::color::White)
+                    t::color::Bg(STATUS_HIGHLIGHT),
+                    t::color::Fg(STATUS_TEXT)
                 ),
             Message::Warning(_) => 
                 write!(out, "{}{}", 
@@ -44,11 +50,6 @@ impl Message {
         }
     }
 }
-
-const LINE_HIGHLIGHT: t::color::Rgb = t::color::Rgb(39, 39, 39);
-const LINE_TEXT: t::color::LightWhite = t::color::LightWhite;
-const STATUS_HIGHLIGHT: t::color::Rgb = t::color::Rgb(184, 184, 184);
-const STATUS_TEXT: t::color::White = t::color::White;
 
 pub struct Screen {
     buffer: Buffer,
@@ -105,6 +106,7 @@ impl Screen {
             }
 
             // Print line number:
+            let mut printed = 0;
             let position = t::cursor::Goto(1, (i + 1) as u16);
             write!(out, "{}{:>number_width$} ", position, y + 1)?;
 
@@ -131,17 +133,19 @@ impl Screen {
                             if end.column + end.width > x + width {
                                 // Last character is partially visible, pad the end
                                 let space = (x + width) - end.column;
-
+                                
                                 write!(out, "{}", &line.text[first..end.offset])?; // Print all but last character
                                 write!(out, "{:->space$}", ">")?; // Print padding
                             } else {
                                 // Last character is visible, print the whole line
                                 write!(out, "{}", &line.text[first..])?;
                             }
+                            printed = end.column - start.column;
                         },
                         None => {
                             // Line doesn't collide with right edge, print it whole
                             write!(out, "{}", &line.text[first..])?;
+                            printed = line.width - start.column;
                         }
                     }
                 }
@@ -149,7 +153,6 @@ impl Screen {
 
             // Finish coloring the rest of the row:
             if self.cursor.row == y {
-                let printed = line.width + number_width + 1;
                 let remaining = width - printed;
                 write!(out, "{:remaining$}{}{}", "", t::color::Bg(t::color::Reset), t::color::Fg(t::color::Reset))?;
             }
@@ -391,6 +394,14 @@ impl Screen {
         self.cursor.end(&self.buffer);
     }
 
+    pub fn top(&mut self) {
+        self.cursor.top();
+    }
+
+    pub fn bottom(&mut self) {
+        self.cursor.bottom(&self.buffer);
+    }
+
     pub fn undo(&mut self) {
         if let Some((_, last)) = self.undo_stack.last() {
             let kind = std::mem::discriminant(last);
@@ -437,7 +448,15 @@ impl Screen {
         self.message = None
     }
 
-    pub fn buffer(&self) -> &Buffer {
-        &self.buffer
+    pub fn is_dirty(&self) -> bool {
+        self.buffer.is_dirty()
+    }
+
+    pub fn write(&mut self, overwrite: bool) -> io::Result<usize> {
+        self.buffer.write(overwrite)
+    }
+
+    pub fn path(&self) -> &PathBuf {
+        &self.buffer.path
     }
 }
