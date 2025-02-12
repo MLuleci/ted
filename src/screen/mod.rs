@@ -8,7 +8,7 @@ use crate::Config;
 use termion as t;
 use std::io::{self, Write};
 use std::cmp::min;
-use std::path::PathBuf;
+use std::path::Path;
 
 const LINE_HIGHLIGHT: t::color::Rgb = t::color::Rgb(39, 39, 39);
 const LINE_TEXT: t::color::LightWhite = t::color::LightWhite;
@@ -164,16 +164,16 @@ impl Screen {
 
         if let Some(m) = &self.message {
             let s = m.content();
-            let pad = width as usize - s.width_cjk();
+            let pad = width as usize - 1;
             m.set_color(out)?;
-            write!(out, " {:pad$}", s)?;
+            write!(out, " {:<pad$}", s)?;
         } else {
             write!(out, "{}{}",
                 t::color::Bg(STATUS_HIGHLIGHT),
                 t::color::Fg(STATUS_TEXT)
             )?;
 
-            let path = self.buffer.path
+            let path = self.buffer.path()
                 .file_name()
                 .map_or(
                     "[new buffer]", 
@@ -452,11 +452,15 @@ impl Screen {
         self.buffer.is_dirty()
     }
 
-    pub fn write(&mut self, overwrite: bool) -> io::Result<usize> {
-        self.buffer.write(overwrite)
+    pub fn save(&mut self, overwrite: bool) -> io::Result<usize> {
+        self.buffer.save(overwrite)
     }
 
-    pub fn path(&self) -> &PathBuf {
-        &self.buffer.path
+    pub fn save_as(&mut self, path: &Path, overwrite: bool) -> io::Result<usize> {
+        self.buffer.save_as(&path, overwrite)
+    }
+
+    pub fn path(&self) -> &Path {
+        self.buffer.path()
     }
 }

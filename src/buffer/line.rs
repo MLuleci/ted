@@ -38,6 +38,7 @@ impl<'a> Iterator for ColumnIndices<'a> {
     }
 }
 
+#[derive(Clone)]
 pub struct Line {
     pub text: String,
     pub size: usize, // Number of graphemes

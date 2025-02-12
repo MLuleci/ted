@@ -13,6 +13,7 @@ use termion::event::{Key, Event, MouseEvent};
 use termion::input::{TermRead, MouseTerminal};
 use std::cmp::min;
 use std::io::{stdin, stdout, ErrorKind, Write};
+use std::path::PathBuf;
 use termion::raw::IntoRawMode;
 use std::error::Error;
 use getopts::Options;
@@ -127,11 +128,11 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
                                     index = screens.len() - 1;
                                 }
                             },
-                            'w' | 's' => {
+                            'w' | 's' | 'S' => {
                                 let should_save = 
-                                    screen.is_dirty() && (
-                                        ch == 's'
-                                        || screen.confirm_prompt(
+                                    ch != 'w' || (
+                                        screen.is_dirty() &&
+                                        screen.confirm_prompt(
                                             &mut events, 
                                             &mut stdout, 
                                             "Save changes (Y/n)", 
@@ -139,12 +140,34 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
                                         )?
                                     );
 
+                                let mut wrote: usize = 0;
                                 if should_save {
+                                    let needs_path = screen.path().as_os_str().is_empty() || ch == 'S';
+                                    let mut path = PathBuf::from(screen.path());
+
+                                    if needs_path {
+                                        let reply = screen
+                                            .prompt(
+                                                &mut events,
+                                                &mut stdout,
+                                                "Save as:"
+                                            )?
+                                            .map(PathBuf::from);
+                                        if reply.is_none() { continue; }
+                                        path = reply.unwrap();
+                                    }
+
                                     // Try normally first...
-                                    if let Err(e) = screen.write(false) {
+                                    let result = if needs_path {
+                                        screen.save_as(&path, false)
+                                    } else {
+                                        screen.save( false)
+                                    };
+
+                                    if let Err(e) = result {
                                         // ...if it fails...
                                         match e.kind() {
-                                            ErrorKind::AlreadyExists => {
+                                            ErrorKind::Other | ErrorKind::AlreadyExists => {
                                                 // ...ask user if they want to overwrite
                                                 let overwrite = screen.confirm_prompt(
                                                     &mut events, 
@@ -154,11 +177,19 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
                                                 )?;
 
                                                 if overwrite {
-                                                    if let Err(e) = screen.write(true) {
+                                                    let result = if needs_path {
+                                                        screen.save_as(&path, true)
+                                                    } else {
+                                                        screen.save( true)
+                                                    };
+                                                    
+                                                    if let Err(e) = result {
                                                         // don't crash if we still can't write save
                                                         screen.set_message(Message::Error(e.to_string()));
                                                         timeout = 5;
                                                         continue;
+                                                    } else {
+                                                        wrote = result.unwrap();
                                                     }
                                                 }
                                             },
@@ -169,16 +200,23 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
                                                 continue;
                                             }
                                         }
+                                    } else {
+                                        wrote = result.unwrap();
                                     }
                                 }
 
                                 if ch == 'w' {
                                     screens.remove(index);
-                                    if screens.is_empty() { 
-                                        break;
-                                    } else {
-                                        index = min(screens.len() - 1, index);
+                                    if screens.is_empty() {
+                                        screens.push(Screen::new("", &config));
                                     }
+                                    index = min(screens.len() - 1, index);
+                                }
+
+                                if should_save {
+                                    let m = format!("Wrote {} bytes", wrote);
+                                    screens[index].set_message(Message::Info(m));
+                                    timeout = 1;
                                 }
                             },
                             'p' => {

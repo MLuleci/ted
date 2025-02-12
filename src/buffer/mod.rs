@@ -4,11 +4,12 @@ use line::Line;
 use crate::Config;
 use unicode_segmentation::GraphemeCursor;
 use std::fmt::Display;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::fs::OpenOptions;
 
+#[derive(Clone)]
 pub enum LineEnding { CRLF, LF }
 
 impl LineEnding {
@@ -65,13 +66,13 @@ pub enum Edit {
     Replace(String, Point, usize)
 }
 
+#[derive(Clone)]
 pub struct Buffer {
-    pub path: PathBuf,
+    path: PathBuf,
     lines: Vec<Line>,
     modified: SystemTime,
     ending: LineEnding,
     dirty: bool,
-    writable: bool, // Are we able/allowed to write to the file?
     readonly: bool // Does the user want to be able to write to the file?
 }
 
@@ -83,7 +84,6 @@ impl Buffer {
             ending: LineEnding::default(),
             modified: SystemTime::now(),
             dirty: false,
-            writable: true,
             readonly: config.readonly
         }
     }
@@ -103,7 +103,6 @@ impl Buffer {
         
         let file = file.unwrap();
         let metadata = file.metadata()?;
-        let writable = !metadata.permissions().readonly();
         let modified = metadata.modified()?;
         let mut reader = BufReader::new(file);
         let mut buffer = String::new();
@@ -135,63 +134,77 @@ impl Buffer {
             ending,
             modified,
             dirty: false,
-            writable,
             readonly: config.readonly 
         })
     }
 
-    pub fn write(&mut self, overwrite: bool) -> io::Result<usize> {
-        if self.is_readonly() {
+    fn write_to(&self, path: &Path, overwrite: bool) -> io::Result<usize> {
+        if self.readonly {
             return Err(io::Error::new(
                 io::ErrorKind::ReadOnlyFilesystem,
-                String::from("Buffer is readonly")
+                "Buffer is readonly"
             ));
         }
 
-        if !self.is_writable() {
-            return Err(io::Error::new(
-                io::ErrorKind::ReadOnlyFilesystem,
-                format!("{} is unwritable", self.path.display())
-            ));
+        if path.try_exists()? {
+            let modified = path.metadata()?
+                .modified()
+                .unwrap_or(SystemTime::now());
+            if modified > self.modified && !overwrite {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "File was modified"
+                ));
+            }
         }
 
-        if !self.is_dirty() || self.lines.is_empty() {
-            return Ok(0);
-        }
-
-        let file = OpenOptions::new().write(true).open(&self.path)?;
-        let modified = file.metadata()?.modified().unwrap_or(SystemTime::now());
-
-        if modified > self.modified && !overwrite {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!("{} has been modified", self.path.display())
-            ));
-        }
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(&path)?;
 
         let mut writer = BufWriter::new(&file);
         let data = self.to_string();
         let len = data.len();
 
-        file
-            .set_len(len as u64)
-            .and_then(|_| writer.write_all(data.as_bytes()))?;
+        writer.write_all(data.as_bytes())
+            .and_then(|_| file.set_len(len as u64))?;
 
-        self.dirty = false;
-        self.modified = SystemTime::now();
         Ok(len)
     }
 
-    pub fn is_readonly(&self) -> bool {
-        self.readonly
+    pub fn save(&mut self, overwrite: bool) -> io::Result<usize> {
+        self
+            .write_to(&self.path, overwrite)
+            .inspect(|_| {
+                self.dirty = false;
+                self.modified = SystemTime::now();
+            })
+    }
+
+    pub fn save_as(&mut self, path: &Path, overwrite: bool) -> io::Result<usize> {
+        if path.try_exists()? && !overwrite {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Path already exists"
+            ));
+        }
+
+        self
+            .write_to(&path, overwrite)
+            .inspect(|_| {
+                self.dirty = false;
+                self.modified = SystemTime::now();
+                self.path = PathBuf::from(path);
+            })
     }
 
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }
 
-    pub fn is_writable(&self) -> bool {
-        self.writable
+    pub fn is_readonly(&self) -> bool {
+        self.readonly
     }
 
     pub fn lines(&self) -> &Vec<Line> {
@@ -208,6 +221,10 @@ impl Buffer {
 
     pub fn line_ending(&self) -> &LineEnding {
         &self.ending
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     pub fn execute(&mut self, edit: &Edit) -> Option<Edit> {
@@ -307,7 +324,6 @@ impl std::fmt::Debug for Buffer {
          .field("modified", &self.modified)
          .field("dirty", &self.dirty)
          .field("readonly", &self.readonly)
-         .field("writable", &self.writable)
          .finish()
     }
 }

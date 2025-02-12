@@ -47,9 +47,10 @@ Links:
 - VT100 reference: https://vt100.net/docs/vt100-ug/chapter3.html
 
 # TODOs:
-- Scrolling with mouse
+- Tab input and rendering
 - Shortcuts:
     - M-s: save (done)
+    - M-S: save as (done)
     - M->: switch buffer (done)
     - M-<: switch back buffer (done)
     - C-Left/Right: move and select
@@ -65,3 +66,4 @@ Links:
     - M-f: find
     - M-h: find and replace
     - M-p: switch to buffer by name (done)
+- Write about features in readme
