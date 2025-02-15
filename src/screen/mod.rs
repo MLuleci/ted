@@ -7,13 +7,31 @@ use crate::buffer::{Buffer, Edit, Point};
 use crate::Config;
 use termion as t;
 use std::io::{self, Write};
-use std::cmp::min;
+use std::cmp::{max, min};
+use std::ops::Range;
 use std::path::Path;
 
-const LINE_HIGHLIGHT: t::color::Rgb = t::color::Rgb(39, 39, 39);
-const LINE_TEXT: t::color::LightWhite = t::color::LightWhite;
-const STATUS_HIGHLIGHT: t::color::Rgb = t::color::Rgb(184, 184, 184);
-const STATUS_TEXT: t::color::White = t::color::White;
+const LINE_BG: t::color::Rgb = t::color::Rgb(39, 39, 39);
+const LINE_FG: t::color::LightWhite = t::color::LightWhite;
+const STATUS_BG: t::color::Rgb = t::color::Rgb(84, 84, 84);
+const STATUS_FG: t::color::White = t::color::White;
+const OVERFLOW_BG: t::color::Blue = t::color::Blue;
+const HIGHLIGHT_BG: t::color::Rgb = t::color::Rgb(184, 184, 184);
+const HIGHLIGHT_FG: t::color::Rgb = t::color::Rgb(34, 34, 34);
+
+pub fn intersects(lhs: &Range<usize>, rhs: &Range<usize>) -> bool {
+    !(lhs.end < rhs.start || rhs.end < lhs.start)
+}
+
+pub fn intersection(lhs: &Range<usize>, rhs: &Range<usize>) -> Option<Range<usize>> {
+    if !intersects(lhs, rhs) {
+        None
+    } else {
+        let start = max(lhs.start, rhs.start);
+        let end= min(lhs.end, rhs.end);
+        Some(start..end)
+    }
+}
 
 pub enum Message {
     Info(String),
@@ -34,8 +52,8 @@ impl Message {
         match self {
             Message::Info(_) =>
                 write!(out, "{}{}", 
-                    t::color::Bg(STATUS_HIGHLIGHT),
-                    t::color::Fg(STATUS_TEXT)
+                    t::color::Bg(STATUS_BG),
+                    t::color::Fg(STATUS_FG)
                 ),
             Message::Warning(_) => 
                 write!(out, "{}{}", 
@@ -58,7 +76,8 @@ pub struct Screen {
     pub overwrite: bool,
     message: Option<Message>,
     undo_stack: Vec<(Cursor, Edit)>,
-    redo_stack: Vec<(Cursor, Edit)>
+    redo_stack: Vec<(Cursor, Edit)>,
+    selection: Option<(usize, usize)>
 }
 
 impl Screen {
@@ -77,10 +96,59 @@ impl Screen {
             overwrite: false,
             message,
             undo_stack: Vec::new(),
-            redo_stack: Vec::new()
+            redo_stack: Vec::new(),
+            selection: None
         }
     }
     
+    fn draw_selection<W>(&self, out: &mut W, row: usize, offset: usize, range: Range<usize>) 
+        -> io::Result<()> where W : Write
+    {
+        let line = self.buffer.line(row).expect("row out-of-bounds");
+
+        if let Some((i, j)) = self.selection {
+            let lhs = (range.start + offset)..(range.end + offset);
+            if let Some(int) = intersection(&lhs, &(i..j)) {
+                let start=  int.start - offset;
+                let end = int.end - offset;
+                let last = line.text.len();
+                let points = [0, start, end, last];
+                let current_line = self.cursor.row == row;
+                
+                // Print sections:
+                // [0, start) normal text
+                // [start, end) highlighted text
+                // [end, last) normal text
+                for (i, &p) in points.iter().enumerate() {
+                    let highlight = i == 1;
+                    let n = *points.get(i + 1).unwrap_or(&last);
+
+                    if n - p > 0 {
+                        if highlight {
+                            write!(out, "{}{}", t::color::Fg(HIGHLIGHT_FG), t::color::Bg(HIGHLIGHT_BG))?;
+                        } else if current_line {
+                            write!(out, "{}{}", t::color::Fg(LINE_FG), t::color::Bg(LINE_BG))?;
+                        } else {
+                            write!(out, "{}{}",t::color::Fg(t::color::Reset), t::color::Bg(t::color::Reset))?;
+                        }
+                        write!(out, "{}", &line.text[p..n])?;
+                    }
+                }
+
+                // Set colors once again in case last section was zero length
+                if current_line {
+                    write!(out, "{}{}", t::color::Fg(LINE_FG), t::color::Bg(LINE_BG))?;
+                } else {
+                    write!(out, "{}{}", t::color::Fg(t::color::Reset), t::color::Bg(t::color::Reset))?;
+                }
+
+                return Ok(())
+            }
+        }
+
+        return write!(out, "{}", &line.text[range]);
+    }
+
     pub fn draw<T>(&mut self, out: &mut T) -> io::Result<()> where T : Write {
         self.update_viewport();
         let number_width = self.line_number_width();
@@ -94,36 +162,36 @@ impl Screen {
             .take(height)
             .enumerate();
 
+        let mut offset = 0;
         for (i, line) in lines {
             let x = self.origin.x;
             let y = self.origin.y + i;
 
             // Setup colors:
             if self.cursor.row == y {
-                write!(out, "{}{}", t::color::Bg(LINE_HIGHLIGHT), t::color::Fg(LINE_TEXT))?;
+                write!(out, "{}{}", t::color::Bg(LINE_BG), t::color::Fg(LINE_FG))?;
             } else {
-                write!(out, "{}", t::color::Fg(LINE_HIGHLIGHT))?;
+                write!(out, "{}", t::color::Fg(LINE_BG))?;
             }
 
             // Print line number:
-            let mut printed = 0;
             let position = t::cursor::Goto(1, (i + 1) as u16);
             write!(out, "{}{:>number_width$} ", position, y + 1)?;
 
             if self.cursor.row != y {
-                write!(out, "{}", t::color::Fg(t::color::Reset))?;
+                write!(out, "{}{}", t::color::Fg(t::color::Reset), t::color::Bg(t::color::Reset))?;
             }
 
             let mut iter = line.column_indices();
-            match iter.find(|c| c.column <= x && x < c.column + c.width)
+            let printed = match iter.find(|c| c.column <= x && x < c.column + c.width)
             {
-                None => (), // Line is not visible in viewport
+                None => 0, // Line is not visible in viewport
                 Some(start) => {
                     let mut first = start.offset;
                     if start.column < x {
                         // First character is partially visible, pad the start
                         let space = (start.column + start.width) - x;
-                        write!(out, "{:-<space$}", "<")?;
+                        write!(out, "{}{:<<space$}{}", t::color::Bg(OVERFLOW_BG), "<", t::color::Bg(t::color::Reset))?;
                         first += start.grapheme.len();
                     }
 
@@ -134,28 +202,30 @@ impl Screen {
                                 // Last character is partially visible, pad the end
                                 let space = (x + width) - end.column;
                                 
-                                write!(out, "{}", &line.text[first..end.offset])?; // Print all but last character
-                                write!(out, "{:->space$}", ">")?; // Print padding
+                                self.draw_selection(out, y, offset, first..end.offset)?; // Print all but last character
+                                write!(out, "{}{:>>space$}{}", t::color::Bg(OVERFLOW_BG), ">", t::color::Bg(t::color::Reset))?; // Print padding
                             } else {
                                 // Last character is visible, print the whole line
-                                write!(out, "{}", &line.text[first..])?;
+                                self.draw_selection(out, y, offset, first..end.offset)?;
                             }
-                            printed = end.column - start.column;
+                            end.column - start.column
                         },
                         None => {
                             // Line doesn't collide with right edge, print it whole
-                            write!(out, "{}", &line.text[first..])?;
-                            printed = line.width - start.column;
+                            self.draw_selection(out, y, offset, first..line.text.len())?;
+                            line.width - start.column
                         }
                     }
                 }
-            }
+            };
 
             // Finish coloring the rest of the row:
             if self.cursor.row == y {
                 let remaining = width - printed;
                 write!(out, "{:remaining$}{}{}", "", t::color::Bg(t::color::Reset), t::color::Fg(t::color::Reset))?;
             }
+
+            offset += line.text.len();
         }
 
         // Draw status line:
@@ -168,10 +238,7 @@ impl Screen {
             m.set_color(out)?;
             write!(out, " {:<pad$}", s)?;
         } else {
-            write!(out, "{}{}",
-                t::color::Bg(STATUS_HIGHLIGHT),
-                t::color::Fg(STATUS_TEXT)
-            )?;
+            write!(out, "{}{}", t::color::Bg(STATUS_BG), t::color::Fg(STATUS_FG))?;
 
             let path = self.buffer.path()
                 .file_name()
@@ -181,18 +248,15 @@ impl Screen {
                 );
             let rhs = format!("{} ({}, {}) {}", 
                 if self.overwrite { "INS" } else { "" },
-                self.cursor.row, 
-                self.cursor.column, 
+                self.cursor.row + 1, 
+                self.cursor.column + 1, 
                 self.buffer.line_ending()
             );
             let pad = width as usize - path.width_cjk() - 3;
             write!(out, " {} {:>pad$} ", path, rhs)?;
         }
 
-        write!(out, "{}{}",
-            t::color::Bg(t::color::Reset),
-            t::color::Fg(t::color::Reset),
-        )?;
+        write!(out, "{}{}", t::color::Bg(t::color::Reset), t::color::Fg(t::color::Reset))?;
 
         // Draw cursor:
         let x = (self.cursor.column - self.origin.x + number_width) as u16 + 2;
@@ -224,8 +288,8 @@ impl Screen {
             
             write!(out, "{}{}{} {} {:<pad$} {}{}{}",
                 t::cursor::Goto(1, height),
-                t::color::Bg(STATUS_HIGHLIGHT),
-                t::color::Fg(STATUS_TEXT),
+                t::color::Bg(STATUS_BG),
+                t::color::Fg(STATUS_FG),
                 prompt,
                 buffer,
                 t::color::Bg(t::color::Reset),
@@ -323,6 +387,7 @@ impl Screen {
 
     pub fn move_cursor(&mut self, direction: Direction) {
         self.cursor.step_cursor(&self.buffer, direction);
+        self.deselect();
     }
 
     pub fn set_cursor(&mut self, x: usize,  y: usize) {
@@ -334,6 +399,7 @@ impl Screen {
         let y = min(y + self.origin.y, line_count - 1);
 
         self.cursor = Cursor::from(&self.buffer, x, y);
+        self.deselect();
     }
 
     fn push_undo(&mut self, item: (Cursor, Edit)) {
@@ -388,18 +454,22 @@ impl Screen {
 
     pub fn home(&mut self) {
         self.cursor.home();
+        self.deselect();
     }
 
     pub fn end(&mut self) {
         self.cursor.end(&self.buffer);
+        self.deselect();
     }
 
     pub fn top(&mut self) {
         self.cursor.top();
+        self.deselect();
     }
 
     pub fn bottom(&mut self) {
         self.cursor.bottom(&self.buffer);
+        self.deselect();
     }
 
     pub fn undo(&mut self) {
@@ -419,6 +489,7 @@ impl Screen {
                 }
             }
         }
+        self.deselect();
     }
 
     pub fn redo(&mut self) {
@@ -438,6 +509,7 @@ impl Screen {
                 }
             }
         }
+        self.deselect();
     }
 
     pub fn set_message(&mut self, m: Message) {
@@ -462,5 +534,39 @@ impl Screen {
 
     pub fn path(&self) -> &Path {
         self.buffer.path()
+    }
+
+    pub fn deselect(&mut self) {
+        self.selection = None;
+    }
+
+    pub fn select(&mut self, direction: Direction) {
+        let before = self.cursor.buffer_offset(&self.buffer);
+        self.cursor.step_cursor(&self.buffer, direction);
+        let after = self.cursor.buffer_offset(&self.buffer);
+
+        if let Some((i, j)) = self.selection {
+            if after < before { // Moved left or up
+                if before == i {
+                    self.selection = Some((after, j));
+                } else if after < i {
+                    self.selection = Some((after, i));
+                } else {
+                    self.selection = Some((i, after));
+                }
+            } else if after > before { // Moved right or down
+                if before == j {
+                    self.selection = Some((i, after));
+                } else if after > j {
+                    self.selection = Some((j, after));
+                } else {
+                    self.selection = Some((after, j));
+                }
+            }
+        } else {
+            self.selection = Some((min(before, after), max(before, after)));
+        }
+
+        assert!(self.selection.map_or(true, |(i, j)| i <= j), "Invalid selection");
     }
 }

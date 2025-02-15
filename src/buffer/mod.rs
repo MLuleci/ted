@@ -228,20 +228,20 @@ impl Buffer {
     }
 
     pub fn execute(&mut self, edit: &Edit) -> Option<Edit> {
-        match edit {
+        let undo: Option<Edit> = match edit {
             Edit::Insert(ch, pt) => {
                 if let Some(line) = self.lines.get_mut(pt.y) {
                     if *ch == '\n' {
                         let tail = line.split(pt.x);
                         let index = pt.y + 1;
                         self.lines.insert(index, tail);
-                        self.dirty = true;
-                        return Some(Edit::Delete(Point { x: 0, y: index - 1 }));
+                        Some(Edit::Delete(Point { x: 0, y: index - 1 }))
                     } else {
                         line.insert(*ch, pt.x);
-                        self.dirty = true;
-                        return Some(Edit::Delete(pt.clone()));
+                        Some(Edit::Delete(pt.clone()))
                     }
+                } else {
+                    None
                 }
             },
             Edit::Overwrite(ch, pt) => {
@@ -254,17 +254,17 @@ impl Buffer {
                                 .chars()
                                 .last()
                                 .expect("No character returned");
-                            self.dirty = true;
-                            return Some(Edit::Overwrite(previous, pt.clone()));
+                            Some(Edit::Overwrite(previous, pt.clone()))
                         },
                         Ok(None) => {
                             // Append to the end of the line
                             line.insert(*ch, line.text.len());
-                            self.dirty = true;
-                            return Some(Edit::Delete(pt.clone()));
+                            Some(Edit::Delete(pt.clone()))
                         },
                         Err(_) => panic!("Incomplete chunk - overwrite")
                     }
+                } else {
+                    None
                 }
             },
             Edit::Delete(pt) => {
@@ -278,8 +278,7 @@ impl Buffer {
                                 .chars()
                                 .last()
                                 .expect("No character returned");
-                            self.dirty = true;
-                            return Some(Edit::Insert(ch, pt.clone()));
+                            Some(Edit::Insert(ch, pt.clone()))
                         },
                         Ok(None) => { 
                             // Delete ending and join with next line
@@ -288,17 +287,22 @@ impl Buffer {
                                 let line = self.lines.get_mut(pt.y).unwrap();
                                 let len = line.text.len();
                                 line.concat(next);
-                                self.dirty = true;
-                                return Some(Edit::Insert('\n', Point { x: len, y: pt.y }));
+                                Some(Edit::Insert('\n', Point { x: len, y: pt.y }))
+                            } else {
+                                None
                             }
                         },
                         Err(_) => panic!("Incomplete chunk - delete")
                     }
+                } else {
+                    None
                 }
             },
             _ => unimplemented!()
-        }
-        None
+        };
+        
+        self.dirty |= undo.is_some();
+        return undo;
     }
 }
 

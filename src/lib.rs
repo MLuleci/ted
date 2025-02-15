@@ -285,6 +285,10 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
                     Event::Key(Key::Down) => screen.move_cursor(Direction::Down),
                     Event::Key(Key::Left) => screen.move_cursor(Direction::Left),
                     Event::Key(Key::Right) => screen.move_cursor(Direction::Right),
+                    Event::Key(Key::CtrlUp) => screen.select(Direction::Up),
+                    Event::Key(Key::CtrlDown) => screen.select(Direction::Down),
+                    Event::Key(Key::CtrlLeft) => screen.select(Direction::Left),
+                    Event::Key(Key::CtrlRight) => screen.select(Direction::Right),
                     Event::Mouse(me) => {
                         match me {
                             MouseEvent::Press(_, x, y) => 

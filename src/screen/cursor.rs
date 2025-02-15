@@ -15,7 +15,7 @@ pub enum Direction {
 pub struct Cursor {
     pub row: usize, // Line index
     pub column: usize, // Column index (visible)
-    pub offset: usize, // Byte offset
+    pub offset: usize, // Byte offset (in current line)
     pub index: usize, // Grapheme index
     desired_column: usize // Column index (actual)
 }
@@ -279,5 +279,10 @@ impl Cursor {
     pub fn bottom(&mut self, buf: &Buffer) {
         self.row = buf.line_count() - 1;
         self.end(buf);
+    }
+
+    pub fn buffer_offset(&self, buf: &Buffer) -> usize {
+        buf.lines().iter().take(self.row)
+            .fold(self.offset, |acc, i| acc + i.text.len())
     }
 }

@@ -47,17 +47,20 @@ Links:
 - VT100 reference: https://vt100.net/docs/vt100-ug/chapter3.html
 
 # TODOs:
-- Tab input and rendering
+- Encoding support
+- Word wrapping
+- Tab input, rendering, and conversion
 - Shortcuts:
+    M = chord, C = control
     - M-s: save (done)
     - M-S: save as (done)
     - M->: switch buffer (done)
     - M-<: switch back buffer (done)
-    - C-Left/Right: move and select
+    - C-(Arrow): move and select
     - M-Up/Down: goto start or end of buffer (done)
-    - M-c: copy
-    - M-x: cut
-    - M-p: paste
+    - C-c: copy
+    - C-x: cut
+    - C-p: paste
     - M-z: undo (done)
     - M-Z: redo (done)
     - M-n: new buffer (done)
