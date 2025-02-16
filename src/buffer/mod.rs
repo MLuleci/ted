@@ -351,6 +351,9 @@ impl Buffer {
                 
                 Some(Edit::Paste(l.clone(), buffer))
             }
+            Edit::Paste(pt, s) => {
+                todo!()
+            },
             _ => unimplemented!()
         };
         

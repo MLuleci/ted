@@ -597,7 +597,11 @@ impl Screen {
                 }
             }
         } else {
-            self.selection = if b < a { Some((before, after)) } else { Some((after, before)) };
+            self.selection = if b <= a { 
+                Some((before, after))
+            } else {
+                Some((after, before))
+            };
         }
 
         assert!(self.selection.as_ref().map_or(true, |(l, r)| l.offset <= r.offset), "Invalid selection");
