@@ -77,7 +77,7 @@ pub struct Screen {
     message: Option<Message>,
     undo_stack: Vec<(Cursor, Edit)>,
     redo_stack: Vec<(Cursor, Edit)>,
-    selection: Option<(usize, usize)>
+    selection: Option<(Cursor, Cursor)>
 }
 
 impl Screen {
@@ -106,9 +106,10 @@ impl Screen {
     {
         let line = self.buffer.line(row).expect("row out-of-bounds");
 
-        if let Some((i, j)) = self.selection {
+        if let Some((left, right)) = &self.selection {
             let lhs = (range.start + offset)..(range.end + offset);
-            if let Some(int) = intersection(&lhs, &(i..j)) {
+            let rhs = left.offset..right.offset;
+            if let Some(int) = intersection(&lhs, &rhs) {
                 let start=  int.start - offset;
                 let end = int.end - offset;
                 let last = line.text.len();
@@ -187,7 +188,7 @@ impl Screen {
             {
                 None => 0, // Line is not visible in viewport
                 Some(start) => {
-                    let mut first = start.offset;
+                    let mut first = start.byte;
                     if start.column < x {
                         // First character is partially visible, pad the start
                         let space = (start.column + start.width) - x;
@@ -202,11 +203,11 @@ impl Screen {
                                 // Last character is partially visible, pad the end
                                 let space = (x + width) - end.column;
                                 
-                                self.draw_selection(out, y, offset, first..end.offset)?; // Print all but last character
+                                self.draw_selection(out, y, offset, first..end.byte)?; // Print all but last character
                                 write!(out, "{}{:>>space$}{}", t::color::Bg(OVERFLOW_BG), ">", t::color::Bg(t::color::Reset))?; // Print padding
                             } else {
                                 // Last character is visible, print the whole line
-                                self.draw_selection(out, y, offset, first..end.offset)?;
+                                self.draw_selection(out, y, offset, first..end.byte)?;
                             }
                             end.column - start.column
                         },
@@ -408,7 +409,7 @@ impl Screen {
     }
 
     pub fn insert(&mut self, ch: char) {
-        let pt = Point { x: self.cursor.offset, y: self.cursor.row };
+        let pt = Point { x: self.cursor.byte, y: self.cursor.row };
         let edit = Edit::Insert(ch, pt);
 
         if let Some(undo) = self.buffer.execute(&edit) {
@@ -419,7 +420,7 @@ impl Screen {
     }
 
     pub fn overwrite(&mut self, ch: char) {
-        let pt = Point { x: self.cursor.offset, y: self.cursor.row };
+        let pt = Point { x: self.cursor.byte, y: self.cursor.row };
         let edit = Edit::Overwrite(ch, pt);
 
         if let Some(undo) = self.buffer.execute(&edit) {
@@ -431,19 +432,46 @@ impl Screen {
     }
 
     pub fn backspace(&mut self) {
-        let before = self.cursor.clone();
-        self.cursor.step_cursor(&self.buffer, Direction::Left);
+        let at_zero = self.cursor.row == 0 && self.cursor.column == 0;
+        let has_select = self.selection.is_some();
+        let selection = self.selection.as_ref();
 
-        let pt = Point { x: self.cursor.offset, y: self.cursor.row };
-        let edit = Edit::Delete(pt);
+        if !has_select && at_zero { return; }
+
+        let before = self.cursor.clone();
+        if has_select {
+            // To delete a selection, set cursor to left edge
+            self.cursor = selection.map(|(l, _)| l.clone()).unwrap();
+        } else {
+            // For a regular backspace, step once to the left
+            self.cursor.step_cursor(&self.buffer, Direction::Left);
+        }
+
+        let edit = if has_select { 
+            let (start, end) = selection
+                .map(|(l, r)| (
+                    Point { x: l.byte, y: l.row },
+                    Point { x: r.byte, y: r.row }
+                )).unwrap();
+            Edit::Cut(start, end) 
+        } else {
+            let pt = Point { x: self.cursor.byte, y: self.cursor.row };
+            Edit::Delete(pt)
+        };
 
         if let Some(undo) = self.buffer.execute(&edit) {
             self.push_undo((before, undo));
         }
+        self.deselect();
     }
 
     pub fn delete(&mut self) {
-        let pt = Point { x: self.cursor.offset, y: self.cursor.row };
+        if self.selection.is_some() {
+            self.backspace(); // Same effect as delete for selection
+            return;
+        }
+
+        let pt = Point { x: self.cursor.byte, y: self.cursor.row };
         let edit = Edit::Delete(pt);
 
         if let Some(undo) = self.buffer.execute(&edit) {
@@ -453,7 +481,7 @@ impl Screen {
     }
 
     pub fn home(&mut self) {
-        self.cursor.home();
+        self.cursor.home(&self.buffer);
         self.deselect();
     }
 
@@ -463,7 +491,7 @@ impl Screen {
     }
 
     pub fn top(&mut self) {
-        self.cursor.top();
+        self.cursor.top(&self.buffer);
         self.deselect();
     }
 
@@ -541,32 +569,37 @@ impl Screen {
     }
 
     pub fn select(&mut self, direction: Direction) {
-        let before = self.cursor.buffer_offset(&self.buffer);
+        let before = self.cursor.clone();
         self.cursor.step_cursor(&self.buffer, direction);
-        let after = self.cursor.buffer_offset(&self.buffer);
+        let after = self.cursor.clone();
 
-        if let Some((i, j)) = self.selection {
-            if after < before { // Moved left or up
-                if before == i {
-                    self.selection = Some((after, j));
-                } else if after < i {
-                    self.selection = Some((after, i));
+        let a = after.offset;
+        let b = before.offset;
+
+        if let Some((left, right)) = &self.selection {
+            let l = left.offset;
+            let r = right.offset;
+            if a < b { // Moved left or up
+                if b == l {
+                    self.selection = Some((after, right.clone()));
+                } else if a < l {
+                    self.selection = Some((after, left.clone()));
                 } else {
-                    self.selection = Some((i, after));
+                    self.selection = Some((left.clone(), after));
                 }
-            } else if after > before { // Moved right or down
-                if before == j {
-                    self.selection = Some((i, after));
-                } else if after > j {
-                    self.selection = Some((j, after));
+            } else if a >= b { // Moved right or down
+                if b == r {
+                    self.selection = Some((left.clone(), after));
+                } else if a > r {
+                    self.selection = Some((right.clone(), after));
                 } else {
-                    self.selection = Some((after, j));
+                    self.selection = Some((after, right.clone()));
                 }
             }
         } else {
-            self.selection = Some((min(before, after), max(before, after)));
+            self.selection = if b < a { Some((before, after)) } else { Some((after, before)) };
         }
 
-        assert!(self.selection.map_or(true, |(i, j)| i <= j), "Invalid selection");
+        assert!(self.selection.as_ref().map_or(true, |(l, r)| l.offset <= r.offset), "Invalid selection");
     }
 }

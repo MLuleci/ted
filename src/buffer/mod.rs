@@ -3,6 +3,7 @@ pub mod line;
 use line::Line;
 use crate::Config;
 use unicode_segmentation::GraphemeCursor;
+use std::cmp::min;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -61,9 +62,9 @@ pub enum Edit {
     Insert(char, Point),
     Overwrite(char, Point),
     Delete(Point),
-    Paste(String, Point),
-    Cut(Point, usize), // = starting point & length
-    Replace(String, Point, usize)
+    Paste(Point, String),
+    Cut(Point, Point),
+    Replace(Point, usize, String)
 }
 
 #[derive(Clone)]
@@ -282,11 +283,11 @@ impl Buffer {
                         },
                         Ok(None) => { 
                             // Delete ending and join with next line
-                            if pt.y < self.line_count() {
+                            if pt.y < self.line_count() - 1 {
                                 let next = self.lines.remove(pt.y + 1);
                                 let line = self.lines.get_mut(pt.y).unwrap();
                                 let len = line.text.len();
-                                line.concat(next);
+                                line.concat(&next);
                                 Some(Edit::Insert('\n', Point { x: len, y: pt.y }))
                             } else {
                                 None
@@ -298,6 +299,58 @@ impl Buffer {
                     None
                 }
             },
+            Edit::Cut(l, r) => {
+                let mut buffer = String::new();
+                let mut head = l.clone();
+
+                // Cut parts of lines between `l` and `r`
+                while head.y <= r.y {
+                    if let Some(line) = self.lines.get_mut(head.y) {
+                        let limit = if head.y != r.y { line.text.len() } else { r.x };
+                        let take = limit - head.x;
+                        let cut = if take >= line.text.len() {
+                            line.clear()
+                        } else {
+                            line.delete(head.x..(head.x + take))
+                        };
+                        buffer.push_str(&cut);
+
+                        if head.y < r.y { 
+                            buffer.push_str(&self.ending.value());
+                        }
+
+                        head.x = 0;
+                        head.y += 1;
+                    } else { break }
+                }
+
+                if l.y != r.y {
+                    // Concatenate first and last lines
+                    let last = self.lines
+                        .get_mut(r.y)
+                        .map(|l| l.clear())
+                        .unwrap_or_default();
+
+                    if let Some(first) = self.lines.get_mut(l.y) {
+                        first.concat_str(&last);
+                    }
+
+                    // Delete empty lines between `l` and `r`
+                    for i in (l.y..=r.y).rev() {
+                        if let Some(line) = self.lines.get(i) {
+                            if line.text.is_empty() {
+                                self.lines.remove(i);
+                            }
+                        }
+                    }
+
+                    if self.line_count() == 0 {
+                        self.lines.push(Line::new());
+                    }
+                }
+                
+                Some(Edit::Paste(l.clone(), buffer))
+            }
             _ => unimplemented!()
         };
         

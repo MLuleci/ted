@@ -9,7 +9,7 @@ pub struct ColumnIndices<'a> {
 }
 
 pub struct ColumnIndex<'a> {
-    pub offset: usize, // byte offset
+    pub byte: usize, // byte offset
     pub width: usize, // column width
     pub column: usize,
     pub index: usize, // grapheme index
@@ -26,7 +26,7 @@ impl<'a> Iterator for ColumnIndices<'a> {
             self.column += width;
             return Some(
                 ColumnIndex {
-                    offset,
+                    byte: offset,
                     width,
                     column,
                     index,
@@ -93,10 +93,23 @@ impl Line {
         s
     }
 
-    pub fn concat(&mut self, other: Self) {
+    pub fn clear(&mut self) -> String {
+        let s = std::mem::take(&mut self.text);
+        self.width = 0;
+        self.size = 0;
+        s
+    }
+
+    pub fn concat(&mut self, other: &Self) {
         self.text.push_str(&other.text);
         self.width += other.width;
         self.size += other.size;
+    }
+
+    pub fn concat_str(&mut self, s: &String) {
+        self.text.push_str(s);
+        self.width += s.width_cjk();
+        self.size += s.graphemes(true).count();
     }
 
     pub fn split(&mut self, i: usize) -> Self {

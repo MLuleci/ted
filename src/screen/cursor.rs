@@ -15,8 +15,9 @@ pub enum Direction {
 pub struct Cursor {
     pub row: usize, // Line index
     pub column: usize, // Column index (visible)
-    pub offset: usize, // Byte offset (in current line)
+    pub byte: usize, // Byte offset (in current line)
     pub index: usize, // Grapheme index
+    pub offset: usize, // Byte offset (in buffer)
     desired_column: usize // Column index (actual)
 }
 
@@ -25,8 +26,9 @@ impl Cursor {
         Cursor {
             row: 0,
             column: 0,
-            offset: 0,
+            byte: 0,
             index: 0,
+            offset: 0,
             desired_column: 0
         }
     }
@@ -34,11 +36,13 @@ impl Cursor {
     pub fn from(buf: &Buffer, x: usize, y: usize) -> Self {
         let line = buf.line(y).expect("No such line");
         let index = Cursor::find_column(line, x);
+        let offset = Cursor::offset(y, buf) + index.byte;
         Cursor {
             row: y,
             column: index.column,
-            offset: index.offset,
+            byte: index.byte,
             index: index.index,
+            offset,
             desired_column: 0
         }
     }
@@ -47,7 +51,7 @@ impl Cursor {
         where T : Fn(&ColumnIndex) -> bool 
     {
         let mut previous = ColumnIndex {
-            offset: 0,
+            byte: 0,
             width: 0,
             column: 0,
             index: 0,
@@ -66,7 +70,7 @@ impl Cursor {
     
     fn get_last_index(line: &Line) -> ColumnIndex {
         ColumnIndex {
-            offset: line.text.len(),
+            byte: line.text.len(),
             width: 0,
             column: line.width,
             index: line.size,
@@ -94,7 +98,7 @@ impl Cursor {
 
         let line = buf.line(self.row).unwrap();
         assert!(self.column <= line.width, "Column out-of-bounds");
-        assert!(self.offset <= line.text.len(), "Offset out-of-bounds");
+        assert!(self.byte <= line.text.len(), "Offset out-of-bounds");
         assert!(self.index <= line.size, "Index out-of-bounds");
     }
 
@@ -104,7 +108,7 @@ impl Cursor {
                 if steps > self.row {
                     // Goto start of first line
                     self.row = 0;
-                    self.offset = 0;
+                    self.byte = 0;
                     self.index = 0;
                     self.column = 0;
                 } else {
@@ -114,7 +118,7 @@ impl Cursor {
                     let line = buf.line(self.row).unwrap();
                     let index = Cursor::find_column(line, self.desired_column);
                     self.column = index.column;
-                    self.offset = index.offset;
+                    self.byte = index.byte;
                     self.index = index.index;
                 }
             },
@@ -124,7 +128,7 @@ impl Cursor {
                     // Goto end of last line
                     self.row = line_count - 1;
                     let line = buf.line(self.row).unwrap();
-                    self.offset = line.text.len();
+                    self.byte = line.text.len();
                     self.index = line.size;
                     self.column = line.width;
                 } else {
@@ -134,7 +138,7 @@ impl Cursor {
                     let line = buf.line(self.row).unwrap();
                     let index = Cursor::find_column(line, self.desired_column);
                     self.column = index.column;
-                    self.offset = index.offset;
+                    self.byte = index.byte;
                     self.index = index.index;
                 }
             },
@@ -161,7 +165,7 @@ impl Cursor {
                 let line = buf.line(self.row).unwrap();
                 let index = Cursor::find_index(line, self.index);
                 self.column = index.column;
-                self.offset = index.offset;
+                self.byte = index.byte;
                 self.desired_column = index.column;
             },
             Direction::Right => {
@@ -188,11 +192,12 @@ impl Cursor {
                 let line = buf.line(self.row).unwrap();
                 let index = Cursor::find_index(line, self.index);
                 self.column = index.column;
-                self.offset = index.offset;
+                self.byte = index.byte;
                 self.desired_column = index.column;
             }
         }
 
+        self.offset = Cursor::offset(self.row, buf) + self.byte;
         self.check_bounds(buf);
     }
 
@@ -201,14 +206,15 @@ impl Cursor {
         match direction {
             Direction::Left => {
                 let line = buf.line(self.row).unwrap();
-                let mut cursor = GraphemeCursor::new(self.offset, line.text.len(), true);
+                let mut cursor = GraphemeCursor::new(self.byte, line.text.len(), true);
                 match cursor.prev_boundary(&line.text, 0) {
                     Ok(Some(previous)) => {
                         // Step left by one character
-                        let s = &line.text[previous..self.offset];
+                        let s = &line.text[previous..self.byte];
                         self.column -= s.width_cjk();
-                        self.offset = previous;
+                        self.byte = previous;
                         self.index -= 1;
+                        self.offset -= 1;
                         self.desired_column = self.column;
                     },
                     Ok(None) => {
@@ -218,7 +224,7 @@ impl Cursor {
                             self.end(buf);
                         } else {
                             // Go to start of first line
-                            self.home();
+                            self.home(buf);
                         }
                     },
                     Err(_) => panic!("Incomplete chunk - step left")
@@ -227,21 +233,22 @@ impl Cursor {
             Direction::Right => {
                 let line = buf.line(self.row).unwrap();
                 let line_count = buf.line_count();
-                let mut cursor = GraphemeCursor::new(self.offset, line.text.len(), true);
+                let mut cursor = GraphemeCursor::new(self.byte, line.text.len(), true);
                 match cursor.next_boundary(&line.text, 0) {
                     Ok(Some(next)) => {
                         // Step right by one character
-                        let s = &line.text[self.offset..next];
+                        let s = &line.text[self.byte..next];
                         self.column += s.width_cjk();
-                        self.offset = next;
+                        self.byte = next;
                         self.index += 1;
+                        self.offset += 1;
                         self.desired_column = self.column;
                     },
                     Ok(None) => {
                         if self.row < line_count - 1 {
                             // Go to start of next line
                             self.row += 1;
-                            self.home();
+                            self.home(buf);
                         } else {
                             // Go to end of last line
                             self.end(buf);
@@ -256,24 +263,26 @@ impl Cursor {
         self.check_bounds(buf);
     }
 
-    pub fn home(&mut self) {
+    pub fn home(&mut self, buf: &Buffer) {
         self.column = 0;
-        self.offset = 0;
+        self.byte = 0;
         self.index = 0;
+        self.offset = Cursor::offset(self.row, buf);
         self.desired_column = 0;
     }
 
     pub fn end(&mut self, buf: &Buffer) {
         let line = buf.line(self.row).unwrap();
         self.column = line.width;
-        self.offset = line.text.len();
+        self.byte = line.text.len();
         self.index = line.size;
+        self.offset = Cursor::offset(self.row, buf) + self.byte;
         self.desired_column = self.column;
     }
 
-    pub fn top(&mut self) {
+    pub fn top(&mut self, buf: &Buffer) {
         self.row = 0;
-        self.home();
+        self.home(buf);
     }
 
     pub fn bottom(&mut self, buf: &Buffer) {
@@ -281,8 +290,8 @@ impl Cursor {
         self.end(buf);
     }
 
-    pub fn buffer_offset(&self, buf: &Buffer) -> usize {
-        buf.lines().iter().take(self.row)
-            .fold(self.offset, |acc, i| acc + i.text.len())
+    fn offset(row: usize, buf: &Buffer) -> usize {
+        buf.lines().iter().take(row)
+            .fold(0, |acc, i| acc + i.text.len())
     }
 }
