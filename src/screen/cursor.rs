@@ -211,10 +211,10 @@ impl Cursor {
                     Ok(Some(previous)) => {
                         // Step left by one character
                         let s = &line.text[previous..self.byte];
+                        self.offset -= self.byte - previous;
                         self.column -= s.width_cjk();
                         self.byte = previous;
                         self.index -= 1;
-                        self.offset -= 1;
                         self.desired_column = self.column;
                     },
                     Ok(None) => {
@@ -238,10 +238,10 @@ impl Cursor {
                     Ok(Some(next)) => {
                         // Step right by one character
                         let s = &line.text[self.byte..next];
+                        self.offset += next - self.byte;
                         self.column += s.width_cjk();
                         self.byte = next;
                         self.index += 1;
-                        self.offset += 1;
                         self.desired_column = self.column;
                     },
                     Ok(None) => {

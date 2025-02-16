@@ -3,7 +3,6 @@ pub mod line;
 use line::Line;
 use crate::Config;
 use unicode_segmentation::GraphemeCursor;
-use std::cmp::min;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -64,7 +63,7 @@ pub enum Edit {
     Delete(Point),
     Paste(Point, String),
     Cut(Point, Point),
-    Replace(Point, usize, String)
+    Replace(Point, Point, String)
 }
 
 #[derive(Clone)]
@@ -228,6 +227,77 @@ impl Buffer {
         &self.path
     }
 
+    fn drain(&mut self, from: &Point, to: &Point) -> String {
+        let mut buffer = String::new();
+        let mut head = from.clone();
+
+        // Cut parts of lines between `from` and `to`
+        while head.y <= to.y {
+            if let Some(line) = self.lines.get_mut(head.y) {
+                let limit = if head.y != to.y { line.text.len() } else { to.x };
+                let take = limit - head.x;
+                let cut = if take >= line.text.len() {
+                    line.clear()
+                } else {
+                    line.delete(head.x..(head.x + take))
+                };
+                buffer.push_str(&cut);
+
+                if head.y < to.y { 
+                    buffer.push_str(&self.ending.value());
+                }
+
+                head.x = 0;
+                head.y += 1;
+            } else { break }
+        }
+
+        // Concatenate first and last lines
+        let last = self.lines
+            .get_mut(to.y)
+            .map(|l| l.clear())
+            .unwrap_or_default();
+
+        if let Some(first) = self.lines.get_mut(from.y) {
+            first.concat_str(&last);
+        }
+
+        // Delete empty lines between `from` and `to`
+        if from.y != to.y {
+            for i in (from.y..=to.y).rev() {
+                if let Some(line) = self.lines.get(i) {
+                    if line.text.is_empty() {
+                        self.lines.remove(i);
+                    }
+                }
+            }
+        }
+
+        if self.line_count() == 0 {
+            self.lines.push(Line::new());
+        }
+
+        return buffer;
+    }
+
+    fn insert(&mut self, start: &Point, s: &String) -> Option<Point> {
+        if start.y >= self.line_count() { return None; }
+
+        let mut line = self.lines.remove(start.y);
+        let tail = line.text.split_off(start.x);
+        let buffer = line.text + s + &tail;
+
+        let lines: Vec<Line> = buffer.lines().map(Line::from).collect();
+        let len = lines.last().map_or(0, |l| l.text.len() - tail.len());
+        let count = lines.len() - 1;
+
+        for (i, l) in lines.into_iter().enumerate() {
+            self.lines.insert(start.y + i, l);
+        }
+
+        Some(Point { x: len, y: start.y + count })
+    }
+
     pub fn execute(&mut self, edit: &Edit) -> Option<Edit> {
         let undo: Option<Edit> = match edit {
             Edit::Insert(ch, pt) => {
@@ -300,75 +370,18 @@ impl Buffer {
                 }
             },
             Edit::Cut(l, r) => {
-                let mut buffer = String::new();
-                let mut head = l.clone();
-
-                // Cut parts of lines between `l` and `r`
-                while head.y <= r.y {
-                    if let Some(line) = self.lines.get_mut(head.y) {
-                        let limit = if head.y != r.y { line.text.len() } else { r.x };
-                        let take = limit - head.x;
-                        let cut = if take >= line.text.len() {
-                            line.clear()
-                        } else {
-                            line.delete(head.x..(head.x + take))
-                        };
-                        buffer.push_str(&cut);
-
-                        if head.y < r.y { 
-                            buffer.push_str(&self.ending.value());
-                        }
-
-                        head.x = 0;
-                        head.y += 1;
-                    } else { break }
-                }
-
-                if l.y != r.y {
-                    // Concatenate first and last lines
-                    let last = self.lines
-                        .get_mut(r.y)
-                        .map(|l| l.clear())
-                        .unwrap_or_default();
-
-                    if let Some(first) = self.lines.get_mut(l.y) {
-                        first.concat_str(&last);
-                    }
-
-                    // Delete empty lines between `l` and `r`
-                    for i in (l.y..=r.y).rev() {
-                        if let Some(line) = self.lines.get(i) {
-                            if line.text.is_empty() {
-                                self.lines.remove(i);
-                            }
-                        }
-                    }
-
-                    if self.line_count() == 0 {
-                        self.lines.push(Line::new());
-                    }
-                }
-                
+                let buffer = self.drain(l, r);
                 Some(Edit::Paste(l.clone(), buffer))
-            }
-            Edit::Paste(pt, s) => {
-                if pt.y >= self.line_count() { return None; }
-
-                let mut line = self.lines.remove(pt.y);
-                let tail = line.text.split_off(pt.x);
-                let buffer = line.text + s + &tail;
-
-                let lines: Vec<Line> = buffer.lines().map(Line::from).collect();
-                let len = lines.last().map_or(0, |l| l.text.len());
-                let count = lines.len();
-
-                for (i, l) in lines.into_iter().enumerate() {
-                    self.lines.insert(pt.y + i, l);
-                }
-
-                Some(Edit::Cut(pt.clone(), Point { x: len, y: pt.y + count }))
             },
-            _ => unimplemented!()
+            Edit::Paste(pt, s) => {
+                self.insert(pt, s)
+                    .map(|end| Edit::Cut(pt.clone(), end))
+            },
+            Edit::Replace(l, r, s) => {
+                let buffer = self.drain(l, r);
+                self.insert(l, s)
+                    .map(|end| Edit::Replace(l.clone(), end, buffer))
+            }
         };
         
         self.dirty |= undo.is_some();

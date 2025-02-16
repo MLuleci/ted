@@ -409,17 +409,29 @@ impl Screen {
     }
 
     pub fn insert(&mut self, ch: char) {
-        let pt = Point { x: self.cursor.byte, y: self.cursor.row };
-        let edit = Edit::Insert(ch, pt);
+        let edit = if let Some((l, r)) = &self.selection {
+            self.cursor = l.clone();
+            let start = Point { x: l.byte, y: l.row };
+            let end = Point { x: r.byte, y: r.row };
+            Edit::Replace(start, end, ch.to_string())
+        } else {
+            let pt = Point { x: self.cursor.byte, y: self.cursor.row };
+            Edit::Insert(ch, pt)
+        };
 
         if let Some(undo) = self.buffer.execute(&edit) {
             let before = self.cursor.clone();
             self.cursor.step_cursor(&self.buffer, Direction::Right);
             self.push_undo((before, undo));
         }
+        self.deselect();
     }
 
     pub fn overwrite(&mut self, ch: char) {
+        if self.selection.is_some() {
+            return self.insert(ch);
+        }
+
         let pt = Point { x: self.cursor.byte, y: self.cursor.row };
         let edit = Edit::Overwrite(ch, pt);
 
@@ -467,8 +479,7 @@ impl Screen {
 
     pub fn delete(&mut self) {
         if self.selection.is_some() {
-            self.backspace(); // Same effect as delete for selection
-            return;
+            return self.backspace();
         }
 
         let pt = Point { x: self.cursor.byte, y: self.cursor.row };

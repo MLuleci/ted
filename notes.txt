@@ -51,22 +51,22 @@ Links:
 - Word wrapping
 - Tab input, rendering, and conversion
 - Shortcuts:
-    M = chord, C = control
-    - M-s: save (done)
-    - M-S: save as (done)
-    - M->: switch buffer (done)
-    - M-<: switch back buffer (done)
-    - C-(Arrow): move and select
-    - M-Up/Down: goto start or end of buffer (done)
+    Chord (C-x):
+    - C-s: save (done)
+    - C-S: save as (done)
+    - C->: switch buffer (done)
+    - C-<: switch back buffer (done)
+    - C-Up/Down: goto start or end of buffer (done)
+    - C-z: undo (done)
+    - C-Z: redo (done)
+    - C-n: new buffer (done)
+    - C-o: open by path (done)
+    - C-w: close buffer (done)
+    - C-p: switch to buffer by name (done)
+    - C-f: find
+    - C-h: find and replace
+    Control:
+    - C-(Arrow): move and select (done)
     - C-c: copy
     - C-x: cut
     - C-p: paste
-    - M-z: undo (done)
-    - M-Z: redo (done)
-    - M-n: new buffer (done)
-    - M-o: open by path (done)
-    - M-w: close buffer (done)
-    - M-f: find
-    - M-h: find and replace
-    - M-p: switch to buffer by name (done)
-- Write about features in readme
