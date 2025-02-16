@@ -50,6 +50,7 @@ Links:
 - Encoding support
 - Word wrapping
 - Tab input, rendering, and conversion
+- Minimum rendering instead of clear and re-render
 - Shortcuts:
     Chord (C-x):
     - C-s: save (done)
