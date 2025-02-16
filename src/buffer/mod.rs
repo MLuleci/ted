@@ -352,7 +352,21 @@ impl Buffer {
                 Some(Edit::Paste(l.clone(), buffer))
             }
             Edit::Paste(pt, s) => {
-                todo!()
+                if pt.y >= self.line_count() { return None; }
+
+                let mut line = self.lines.remove(pt.y);
+                let tail = line.text.split_off(pt.x);
+                let buffer = line.text + s + &tail;
+
+                let lines: Vec<Line> = buffer.lines().map(Line::from).collect();
+                let len = lines.last().map_or(0, |l| l.text.len());
+                let count = lines.len();
+
+                for (i, l) in lines.into_iter().enumerate() {
+                    self.lines.insert(pt.y + i, l);
+                }
+
+                Some(Edit::Cut(pt.clone(), Point { x: len, y: pt.y + count }))
             },
             _ => unimplemented!()
         };
